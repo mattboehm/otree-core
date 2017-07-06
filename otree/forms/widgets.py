@@ -6,7 +6,7 @@ from django.utils.encoding import force_text
 from django.utils.translation import ugettext_lazy
 import babel
 import babel.numbers
-import easymoney
+from otree import easymoney
 import floppyforms.__future__ as forms
 import floppyforms.widgets
 
@@ -81,7 +81,7 @@ class _BaseMoneyInput(forms.NumberInput):
         currency_symbol_is_prefix = u'\xa4' in pattern.prefix[0]
 
     def _format_value(self, value):
-        if isinstance(value, easymoney.Money):
+        if isinstance(value, easymoney.Currency):
             value = Decimal(value)
         return force_text(value)
 
@@ -117,7 +117,7 @@ class SliderInput(forms.RangeInput):
         super(SliderInput, self).__init__(*args, **kwargs)
 
     def _format_value(self, value):
-        if isinstance(value, easymoney.Money):
+        if isinstance(value, easymoney.Currency):
             value = Decimal(value)
         return force_text(value)
 

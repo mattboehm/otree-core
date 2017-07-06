@@ -18,7 +18,7 @@ from django.utils.translation import ugettext as _
 from django.db.models.options import FieldDoesNotExist
 
 
-import easymoney
+from otree import easymoney
 
 import otree.common_internal
 import otree.models
@@ -263,9 +263,9 @@ class BaseModelForm(
             )
             if cond:
                 min_bound, max_bound = self._get_field_boundaries(field_name)
-                if isinstance(min_bound, easymoney.Money):
+                if isinstance(min_bound, easymoney.Currency):
                     min_bound = Decimal(min_bound)
-                if isinstance(max_bound, easymoney.Money):
+                if isinstance(max_bound, easymoney.Currency):
                     max_bound = Decimal(max_bound)
                 if min_bound is not None:
                     field.widget.attrs['min'] = min_bound

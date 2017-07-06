@@ -1,7 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-from __future__ import absolute_import
-
+from decimal import Decimal
 import six
 
 from django.db import models
@@ -12,8 +9,6 @@ from django.apps import apps
 
 from .serializedfields import JSONField as _JSONFieldInternal
 
-import easymoney
-
 from .idmap import SharedMemoryModelBase
 from .idmap import SharedMemoryModel
 
@@ -21,6 +16,8 @@ import otree.common
 from otree.common_internal import (
     expand_choice_tuples, get_app_label_from_import_path)
 from otree.constants_internal import field_required_msg
+from otree.easymoney import (
+    MoneyChoiceField, MoneyFormField, Currency, RealWorldCurrency)
 
 
 class OTreeModelBase(SharedMemoryModelBase):
@@ -160,16 +157,46 @@ class _OtreeNumericFieldMixin(_OtreeModelFieldMixin):
     auto_submit_default = 0
 
 
-class RealWorldCurrencyField(_OtreeNumericFieldMixin, easymoney.MoneyField):
-    MONEY_CLASS = otree.common.RealWorldCurrency
+class CurrencyField(
+    _OtreeNumericFieldMixin,
+    six.with_metaclass(models.SubfieldBase, models.DecimalField)):
 
-    auto_submit_default = otree.common.RealWorldCurrency(0)
+    MONEY_CLASS = Currency
+    auto_submit_default = MONEY_CLASS(0)
+
+    # NOTE: we specify default value for max_digits for extra ease
+    def __init__(self, verbose_name=None, name=None, max_digits=12, **kwargs):
+        self.max_digits, self.decimal_places = max_digits, self.MONEY_CLASS.DECIMAL_PLACES
+        models.Field.__init__(self, verbose_name, name, **kwargs)
+
+    def deconstruct(self):
+        name, path, args, kwargs = super(CurrencyField, self).deconstruct()
+        del kwargs["decimal_places"]
+        return name, path, args, kwargs
+
+    def to_python(self, value):
+        value = models.DecimalField.to_python(self, value)
+        if value is None:
+            return value
+
+        return self.MONEY_CLASS(value)
+
+    def get_prep_value(self, value):
+        if value is None:
+            return None
+        return Decimal(self.to_python(value))
+
+    def formfield(self, **kwargs):
+        defaults = {
+            'form_class': MoneyFormField,
+            'choices_form_class': MoneyChoiceField,
+        }
+        defaults.update(kwargs)
+        return super(CurrencyField, self).formfield(**defaults)
 
 
-class CurrencyField(_OtreeNumericFieldMixin, easymoney.MoneyField):
-    MONEY_CLASS = otree.common.Currency
-
-    auto_submit_default = otree.common.Currency(0)
+class RealWorldCurrencyField(CurrencyField):
+    MONEY_CLASS = RealWorldCurrency
 
 
 class _JSONField(_OtreeModelFieldMixin, _JSONFieldInternal):

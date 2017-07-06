@@ -1,11 +1,5 @@
 from typing import Union, List, Any
-from otree.common import RealWorldCurrency
-
-class Currency:
-    def __init__(self, *args):
-        pass
-
-    def to_real_world_currency(self, session): pass
+from otree.common import RealWorldCurrency, Currency
 
 def currency_range(first, last, increment) -> List[Currency]: pass
 def safe_json(obj): pass
@@ -20,7 +14,7 @@ class models:
     def __getattr__(self, item):
         pass
 
-    class BooleanField(object):
+    class BooleanField(bool):
         def __init__(
                 self,
                 *,
@@ -34,7 +28,7 @@ class models:
                 **kwargs):
             pass
 
-    class CharField(object):
+    class CharField(str):
         def __init__(
                 self,
                 *,
@@ -55,7 +49,8 @@ class models:
     # because if I use inheritance, PyCharm doesn't auto-complete
     # while typing args
 
-    class PositiveIntegerField:
+    class PositiveIntegerField(int):
+
         def __init__(
             self,
             *,
@@ -72,7 +67,7 @@ class models:
             **kwargs):
                 pass
 
-    class IntegerField:
+    class IntegerField(int):
         def __init__(
             self,
             *,
@@ -89,7 +84,7 @@ class models:
             **kwargs):
                 pass
 
-    class FloatField:
+    class FloatField(float):
         def __init__(
             self,
             *,
@@ -106,7 +101,7 @@ class models:
             **kwargs):
                 pass
 
-    class CurrencyField:
+    class CurrencyField(Currency):
         def __init__(
             self,
             *,
@@ -123,7 +118,7 @@ class models:
             **kwargs):
                 pass
 
-    class TextField:
+    class TextField(str):
         pass
 
 

@@ -1,4 +1,4 @@
-import easymoney
+from otree import easymoney
 from otree.common import currency_range
 from otree.db import models
 import otree.models
@@ -61,4 +61,4 @@ class FormFieldModel(otree.models.BaseGroup):
 
 class CurrencyFieldTestModel(otree.db.models.Model):
     currency_with_default_value_zero = models.CurrencyField(
-        initial=easymoney.Money(0), min=0)
+        initial=easymoney.Currency(0), min=0)
