@@ -366,21 +366,31 @@ def pages_function(rules, **kwargs):
     if rules.module_exists('views'):
         views_module = rules.get_module('views')
         try:
-            page_list = views_module.page_sequence
+            page_sequence = views_module.page_sequence
         except:
             rules.push_error('views.py is missing the variable page_sequence.')
             return
         else:
-            for i, ViewCls in enumerate(page_list):
+            for i, ViewCls in enumerate(page_sequence):
                 # there is no good reason to include Page in page_sequence.
-                # however, WaitPage could belong there. it works fine currently
-                # and can save the effort of subclassing
-                if ViewCls.__name__ == 'Page':
+                # As for WaitPage: even though it works fine currently
+                # and can save the effort of subclassing,
+                # we should restrict it, because:
+                # - one user had "class WaitPage(Page):".
+                # - if someone makes "class WaitPage(WaitPage):", they might
+                #   not realize why it's inheriting the extra behavior.
+                # overall, I think the small inconvenience of having to subclass
+                # once per app
+                # is outweighed by the unexpected behavior if someone subclasses
+                # it without understanding inheritance.
+                # BUT: built-in Trust game has a wait page called WaitPage.
+                # need to get rid of that first.
+                if ViewCls.__name__ == 'Page': #in ('Page', 'WaitPage'):
                     msg = (
                         "views.py: page_sequence cannot contain "
-                        "a class called 'Page'. You should subclass Page "
+                        "a class called '{}'. You should subclass {} "
                         "and give your page a different name."
-                    )
+                    ).format(ViewCls.__name__, ViewCls.__name__)
                     rules.push_error(msg)
                 if issubclass(ViewCls,
                               otree.views.abstract.WaitPage):

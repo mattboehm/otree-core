@@ -73,6 +73,7 @@
 $(document).ready(function () {
 
     var socket;
+    var alreadyRedirected = false;
 
     initWebSocket();
 
@@ -99,11 +100,16 @@ $(document).ready(function () {
 
 
             console.log('Received redirect message', e.data);
-            window.location.href = '{{ view.redirect_url|safe }}';
+            if (alreadyRedirected) {
+                console.log('why does this execute??')
+            } else {
+                alreadyRedirected = true;
+                window.location.href = '{{ view.redirect_url|safe }}';
+            }
 
         };
         socket.onopen = function() {
-            console.log('WebSocket connected');
+            console.log('WebSocket connected...');
         };
         socket.onclose = function() {
             console.log('WebSocket disconnected');
