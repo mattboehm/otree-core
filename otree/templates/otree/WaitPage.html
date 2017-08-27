@@ -103,7 +103,7 @@ $(document).ready(function () {
             if (alreadyRedirected) {
                 console.log('why does this execute??')
             } else {
-                alreadyRedirected = true;
+                //alreadyRedirected = true;
                 window.location.href = '{{ view.redirect_url|safe }}';
             }
 
