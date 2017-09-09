@@ -97,6 +97,7 @@ def _get_save_objects_model_instances():
 
 def save_objects():
     for instance in _get_save_objects_model_instances():
+        print('***saving', instance, instance.id)
         # if there are no changes on the instance, SaveTheChange will detect
         # that very quickly and skip saving.
         instance.save()

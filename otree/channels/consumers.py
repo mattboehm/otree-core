@@ -94,8 +94,8 @@ class GroupByArrivalTime(OTreeJsonWebsocketConsumer):
         ready = CompletedGroupWaitPage.objects.filter(
             page_index=page_index,
             id_in_subsession=int(group_id_in_subsession),
-            session_id=session_pk,
-            fully_completed=True).exists()
+            session_id=session_pk
+        ).exists()
         if ready:
             self.send({'status': 'ready'})
 
@@ -121,13 +121,11 @@ class WaitPage(OTreeJsonWebsocketConsumer):
             ready = CompletedGroupWaitPage.objects.filter(
                 page_index=page_index,
                 id_in_subsession=int(group_id_in_subsession),
-                session_id=session_pk,
-                fully_completed=True).exists()
+                session_id=session_pk).exists()
         else:  # subsession
             ready = CompletedSubsessionWaitPage.objects.filter(
                 page_index=page_index,
-                session_id=session_pk,
-                fully_completed=True).exists()
+                session_id=session_pk).exists()
         if ready:
             self.send({'status': 'ready'})
 
@@ -197,122 +195,6 @@ def create_session(message):
                 {'status': 'session_ready'})}
         )
 
-
-class AfterAllPlayersArriveSingleThreaded(BaseConsumer):
-
-    def already_complete(self):
-        if self.wp.wait_for_all_groups:
-            already_completed = CompletedSubsessionWaitPage.objects.filter(
-                page_index=self.index_in_pages,
-                session_id=self.session_id
-            ).exists()
-        else:
-            already_completed = CompletedGroupWaitPage.objects.create(
-                page_index=self.index_in_pages,
-                id_in_subsession=self.group_id_in_subsession,
-                session_id=self.session_id
-            )
-        return already_completed
-
-    def dispatch(self, message, **kwargs):
-        self.set_attributes(kwargs)
-        if self.already_complete():
-            return
-        self.run()
-
-
-    def set_attributes(self, kwargs):
-        from otree.common_internal import get_views_module
-        from django.apps import apps
-        app_name = kwargs['app_name']
-        # FIXME: app_name or app_label?
-        app_config = apps.get_app_config('app_label')
-        views_module = get_views_module(app_name)
-        models_module = get_models_module(app_name)
-        WaitPageClass = getattr(views_module, kwargs['page_name'])
-        self.index_in_pages = kwargs['index_in_pages']
-
-        group_id = kwargs.get('group_id')
-        self.group_id_in_subsession = kwargs.get('group_id_in_subsession')
-        # for WaitPageCompletion
-        subsession_id = kwargs['subsession_id']
-        self.session_id = kwargs['session_id']
-
-        self.wp = WaitPageClass() # type: otree.views.abstract.WaitPage
-
-
-        GroupClass = app_config.get_model('Group')
-        SubsessionClass = app_config.get_model('Subsession')
-
-        group_id = kwargs.get('group_id')
-        if group_id:
-            group = GroupClass.objects.get(id=group_id)
-        else:
-            group = None
-        subsession = SubsessionClass.objects.get(id=subsession_id)
-        group_or_subsession = group or subsession
-        session = subsession.session
-
-        # set attributes
-        wp = self.wp
-        if group:
-            wp.group = group
-        wp.subsession = subsession
-        wp.session = session
-        wp.round_number = subsession.round_number
-
-        self.group = group
-        self.subsession = subsession
-        self.session = session
-
-    def run(self):
-        self.after_all_players_arrive()
-
-    def after_all_players_arrive(self):
-        wp = self.wp
-        group_or_subsession = self.group or self.subsession
-
-        from otree.db.idmap import use_cache, save_objects
-
-        with use_cache():
-
-            # the group membership might be modified
-            # in after_all_players_arrive, so calculate this first
-            participant_pk_set = set(
-                group_or_subsession.player_set
-                    .values_list('participant__pk', flat=True))
-
-            wp.after_all_players_arrive()
-            wp.send_completion_message(participant_pk_set)
-            save_objects()
-
-            if wp.wait_for_all_groups:
-                CompletedSubsessionWaitPage.objects.create(
-                    page_index=self.index_in_pages,
-                    session_id=self.session_id
-                )
-            else:
-                CompletedGroupWaitPage.objects.create(
-                    page_index=self.index_in_pages,
-                    id_in_subsession=self.group_id_in_subsession,
-                    session_id=self.session_id
-                )
-
-
-class GroupByArrivalTimeSingleThreaded(AfterAllPlayersArriveSingleThreaded):
-
-    def run(self):
-        regrouped = self.wp._try_to_regroup()
-        if regrouped:
-            self.after_all_players_arrive()
-
-def wait_page(message):
-    kwargs = message['kwargs']
-    if kwargs['group_by_arrival_time']:
-        consumer = GroupByArrivalTimeSingleThreaded(kwargs)
-    else:
-        consumer = AfterAllPlayersArriveSingleThreaded(kwargs)
-    consumer.run()
 
 
 class WaitForSession(OTreeJsonWebsocketConsumer):

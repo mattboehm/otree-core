@@ -29,6 +29,7 @@ import otree.db.idmap
 import otree.forms
 import otree.models
 import otree.timeout.tasks
+import otree.waitpage
 from otree.bots.bot import bot_prettify_post_data
 from otree.bots.browser import EphemeralBrowserBot
 from otree.common_internal import (
@@ -442,12 +443,9 @@ class FormPageOrInGameWaitPage(vanilla.View):
                 # you could just return page.dispatch(),
                 # but that could cause deep recursion
 
-                completion = page._check_if_complete()
-                if completion:
-                    # mark it fully completed right away,
-                    # since we don't run after_all_players_arrive()
-                    completion.fully_completed = True
-                    completion.save()
+                unvisited = page._tally_unvisited()
+                if not unvisited:
+                    page._mark_complete()
                     participant_pk_set = set(
                         page._group_or_subsession.player_set.values_list(
                             'participant__pk', flat=True))
@@ -943,8 +941,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         return self._response_when_ready()
 
     def inner_dispatch(self, *args, **kwargs):
-
-        if self._is_fully_completed():
+        if self._is_completed():
             return self._save_objects_and_response_when_ready()
 
         if not self.is_displayed():
@@ -972,7 +969,6 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
 
         aapa_kwargs = dict(
             app_label=self.subsession._meta.app_label,
-            app_name=self.subsession._meta.app_name, #FIXME
             page_name=self.__class__.__name__,
             subsession_id=self.subsession.id,
             session_id=self.session.id,
@@ -983,18 +979,15 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         if not self.wait_for_all_groups:
             aapa_kwargs.update(dict(
                 group_id=self.group.id,
-                group_in_in_subsession=self.group.id_in_subsession,
-
+                group_id_in_subsession=self.group.id_in_subsession,
             ))
 
-        channels.Channel('otree.after_all_players_arrive').send({
-            'kwargs': aapa_kwargs,
-        })
+        otree.waitpage.send_message(aapa_kwargs)
 
         # give AAPA time to execute in a separate thread
         start_time = time.time()
         while time.time() - start_time < 2:
-            if self._is_fully_completed():
+            if self._is_completed():
                 return self._save_objects_and_response_when_ready()
             time.sleep(0.15)
         return self._get_wait_page()
@@ -1050,18 +1043,29 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             group_id_in_subsession
         )
 
-    def _is_fully_completed(self):
+    def _mark_complete(self):
+        if self.wait_for_all_groups:
+            CompletedSubsessionWaitPage.objects.create(
+                page_index=self._index_in_pages,
+                session=self.session,
+            )
+        else:
+            CompletedGroupWaitPage.objects.create(
+                page_index=self._index_in_pages,
+                id_in_subsession=self.group.id_in_subsession,
+                session=self.session
+            )
+
+    def _is_completed(self):
         """all participants visited, AND action has been run"""
         if self.wait_for_all_groups:
             return CompletedSubsessionWaitPage.objects.filter(
                 page_index=self._index_in_pages,
-                session=self.session,
-                fully_completed=True).exists()
+                session=self.session).exists()
         return CompletedGroupWaitPage.objects.filter(
             page_index=self._index_in_pages,
             id_in_subsession=self.group.id_in_subsession,
-            session=self.session,
-            fully_completed=True).exists()
+            session=self.session).exists()
 
     def _tally_unvisited(self):
         """side effect: set _waiting_for_ids"""
@@ -1102,6 +1106,11 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         self.participant._waiting_for_ids = None
         self._increment_index_in_pages()
         return self._redirect_to_page_the_user_should_be_on()
+
+    def _set_undefined_attributes(self):
+        self.player = self.participant = Undefined_AfterAllPlayersArrive_Player()
+        if self.wait_for_all_groups:
+            self.group = Undefined_AfterAllPlayersArrive_Group()
 
     def after_all_players_arrive(self):
         pass
@@ -1150,22 +1159,12 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             participant___last_request_timestamp__gte=time.time()-STALE_THRESHOLD_SECONDS
         ))
 
-        assert self.player in waiting_players
-
-        # prevent the user
-        current_player = self.player
-        current_participant = self.participant
-        current_group = self.group
+        # should never be empty
+        assert waiting_players
 
         self.player = self.participant = self.group = Undefined_GetPlayersForGroup()
 
         players_for_group = self.get_players_for_group(waiting_players)
-
-        # restore hidden attributes
-        self.player = current_player
-        self.participant = current_participant
-        self.group = current_group
-
 
         if not players_for_group:
             return False

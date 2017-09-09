@@ -43,6 +43,7 @@ logger = logging.getLogger('otree.test.browser_bots')
 
 class Worker(object):
     def __init__(self, redis_conn=None):
+        print('starting botworker')
         self.redis_conn = redis_conn
         self.participants_by_session = OrderedDict()
         self.browser_bots = {}

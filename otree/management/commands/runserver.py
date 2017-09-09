@@ -29,8 +29,24 @@ class Command(runserver.Command):
 
         # so we know not to use Huey
         otree.common_internal.USE_REDIS = False
+        super().handle(*args, **options)
+
+    def inner_run(self, *args, **options):
+        '''inner_run does not get run twice with runserver, unlike .handle()'''
 
         # initialize browser bot worker in process memory
         otree.bots.browser.browser_bot_worker = otree.bots.browser.Worker()
 
-        super(Command, self).handle(*args, **options)
+        wait_page_thread = WaitPageWorkerThread()
+        # start will run .run() in a separate thread
+        wait_page_thread.start()
+        super().inner_run(*args, **options)
+
+import threading
+from otree.waitpage import WaitPageWorkerInProcess
+
+class WaitPageWorkerThread(threading.Thread):
+    def run(self):
+        print("Wait page worker thread running")
+        WaitPageWorkerInProcess().listen()
+        print("Wait page worker thread exited")
