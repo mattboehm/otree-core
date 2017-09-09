@@ -835,69 +835,6 @@ class Undefined_GetPlayersForGroup:
         raise AttributeError(_MSG_Undefined_GetPlayersForGroup)
 
 
-class SingleCallEnforcer:
-    '''
-    enforces that the callback is only run once.
-    This is basically only needed in complex situations where
-    there is a risk of data being cached.
-
-    The code itself is not very interesting; it just reminds me & enforces
-    the correct structure.
-    '''
-
-    def __init__(
-            self, *, callback_that_changes_db_query_result,
-            lock_name='global'
-    ):
-        '''
-        pass callback as an arg instead of making it a method,
-        because the public API may require it (or one of the methods in its
-        call tree) to be a method on the view.
-
-        It's OK for the callback to return early and not complete the action.
-        But if the callback executes the action, it must
-        save its results to the DB inside the callback.
-        '''
-        self.callback = callback_that_changes_db_query_result
-        self.lock_name = lock_name
-
-    def run_if_should(self):
-        '''
-        if the callback is run, this returns its result.
-        '''
-        with get_redis_or_global_db_lock(lock_name=self.lock_name):
-            query_result = self.db_query()
-            should_run = self.should_run(query_result)
-            if should_run:
-                callback_result = self.callback()
-                return callback_result
-
-    def db_query(self):
-        '''
-        Make sure this actually gets all fresh data from the database,
-        not anything cached by idmap. Beware of any query that returns model instances,
-        because those typically go through the cache, except for refresh_from_db.
-        Better to do queries with .values() or .values_list().
-        '''
-        raise NotImplementedError()
-
-    def should_run(self, query_result):
-        raise NotImplementedError()
-
-
-class GBATSingleCallEnforcer(SingleCallEnforcer):
-
-    def db_query(self):
-        player = self.player
-        already_grouped = type(player).objects.filter(id=player.id).values_list(
-            '_group_by_arrival_time_grouped', flat=True
-        )[0]
-        return already_grouped
-
-    def should_run(self, already_grouped):
-        return not already_grouped
-
-
 class GenericWaitPageMixin:
     """used for in-game wait pages, as well as other wait-type pages oTree has
     (like waiting for session to be created, or waiting for players to be
@@ -1026,23 +963,12 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             # for the last player.
             return self._response_when_ready()
 
-        if self.group_by_arrival_time:
-            enforcer = GBATSingleCallEnforcer(
-                callback_that_changes_db_query_result=self._gbat_try_to_regroup,
-                lock_name='gbat'
-            )
-            enforcer.player = self.player
-            regrouped = enforcer.run_if_should()
-            if not regrouped:
+        if not self.group_by_arrival_time:
+            # take a lock because we set "waiting for" list here
+            unvisited = self._tally_unvisited()
+            if unvisited:
+                self.participant.is_on_wait_page = True
                 return self._get_wait_page()
-            # because group may have changed
-            self.group = self.player.group
-
-        # take a lock because we set "waiting for" list here
-        unvisited = self._tally_unvisited()
-        if unvisited:
-            self.participant.is_on_wait_page = True
-            return self._get_wait_page()
 
         aapa_kwargs = dict(
             app_label=self.subsession._meta.app_label,
@@ -1051,6 +977,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             subsession_id=self.subsession.id,
             session_id=self.session.id,
             index_in_pages=self._index_in_pages,
+            group_by_arrival_time=self.group_by_arrival_time,
         )
 
         if not self.wait_for_all_groups:
