@@ -96,3 +96,4 @@ class Command(BaseCommand):
             honcho.add_otree_process(
                 'worker{}'.format(i),
                 'otree runworker')
+        honcho.add_otree_process('waitpageworker', 'otree waitpageworker')

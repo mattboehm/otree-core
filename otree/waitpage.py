@@ -6,6 +6,7 @@ from otree.common_internal import get_models_module
 import json
 import traceback
 import otree.common_internal
+from otree.db.idmap import use_cache, save_objects
 
 logger = logging.getLogger('otree.waitpageworker')
 
@@ -15,21 +16,25 @@ class AfterAllPlayersArriveSingleThreaded:
     def __init__(self, aapa_kwargs):
         self.set_non_model_attributes(aapa_kwargs)
 
-    def run(self):
+    def try_to_complete(self):
         if self.was_already_completed():
-            return
-        self.set_wait_page_attributes()
-        self.inner_run()
+            return True
 
-    def inner_run(self):
-        self.after_all_players_arrive()
+        with use_cache():
+            self.set_wait_page_attributes()
+            return self.inner_try()
+
+    def inner_try(self):
+        return self.complete_aapa()
 
     def set_non_model_attributes(self, kwargs):
         from otree.common_internal import get_views_module
         from django.apps import apps
 
         app_label = kwargs['app_label']
+
         app_config = apps.get_app_config(app_label)
+        self.app_config = app_config
         app_name = app_config.name
         self.GroupClass = app_config.get_model('Group')
         self.SubsessionClass = app_config.get_model('Subsession')
@@ -61,29 +66,26 @@ class AfterAllPlayersArriveSingleThreaded:
         wp.session = session
         wp.round_number = subsession.round_number
         wp._index_in_pages = self.index_in_pages
+        wp._Constants = self.app_config.models_module.Constants
+        wp.GroupClass = self.GroupClass
+        wp.SubsessionClass = self.SubsessionClass
 
 
-    def after_all_players_arrive(self):
+    def complete_aapa(self):
         wp = self.wp
 
-        from otree.db.idmap import use_cache, save_objects
+        # the group membership might be modified
+        # in after_all_players_arrive, so calculate this first
+        participant_pk_set = set(
+            wp._aapa_scope_object.player_set.values_list(
+                'participant__pk', flat=True))
 
-        with use_cache():
-
-            # the group membership might be modified
-            # in after_all_players_arrive, so calculate this first
-            participant_pk_set = set(
-                wp._group_or_subsession.player_set
-                    .values_list('participant__pk', flat=True))
-
-            wp._set_undefined_attributes()
-            wp.after_all_players_arrive()
-            print('****about to save objects')
-            save_objects()
-            print('****finished saving objects')
-
+        wp._set_undefined_attributes()
+        wp.after_all_players_arrive()
+        save_objects()
         wp._mark_complete()
         wp.send_completion_message(participant_pk_set)
+        return True
 
     def was_already_completed(self):
         if self.wp.wait_for_all_groups:
@@ -102,22 +104,22 @@ class AfterAllPlayersArriveSingleThreaded:
 
 class GroupByArrivalTimeSingleThreaded(AfterAllPlayersArriveSingleThreaded):
 
-    def inner_run(self):
-        regrouped = self.wp._try_to_regroup()
+    def inner_try(self):
+        regrouped = self.wp._gbat_try_to_regroup()
         if regrouped:
-            self.after_all_players_arrive()
+            return self.complete_aapa()
+        return False
 
 
-REDIS_KEY_PREFIX = 'otree-wait-page'
 
 class WaitPageWorkerBase:
-    def process_message(self, aapa_kwargs):
+    def try_to_complete(self, aapa_kwargs):
         try:
             if aapa_kwargs['group_by_arrival_time']:
                 consumer = GroupByArrivalTimeSingleThreaded(aapa_kwargs)
             else:
                 consumer = AfterAllPlayersArriveSingleThreaded(aapa_kwargs)
-            consumer.run()
+            return consumer.try_to_complete()
         except Exception as exc:
             retval = {
                 'response_error': repr(exc),
@@ -146,21 +148,11 @@ class WaitPageWorkerRedis(WaitPageWorkerBase):
             # put it in a loop so that we can still receive KeyboardInterrupts
             # otherwise it will block
             while result is None:
-                result = self.redis_conn.blpop(REDIS_KEY_PREFIX, timeout=3)
+                result = self.redis_conn.blpop(REDIS_REQUEST_KEY, timeout=3)
 
             key, message_bytes = result
             aapa_kwargs = json.loads(message_bytes.decode('utf-8'))
-            self.process_message(aapa_kwargs)
-
-
-wait_page_queue = queue.Queue()
-
-def send_message(aapa_kwargs):
-    if otree.common_internal.USE_REDIS:
-        redis_conn = otree.common_internal.get_redis_conn()
-        redis_conn.rpush(REDIS_KEY_PREFIX, json.dumps(aapa_kwargs))
-    else:
-        wait_page_queue.put(aapa_kwargs)
+            self.try_to_complete(aapa_kwargs)
 
 
 class WaitPageWorkerInProcess(WaitPageWorkerBase):
@@ -173,8 +165,27 @@ class WaitPageWorkerInProcess(WaitPageWorkerBase):
             # otherwise it will block
             while aapa_kwargs is None:
                 try:
-                    aapa_kwargs = wait_page_queue.get(timeout=3)
+                    aapa_kwargs = request_queue.get(timeout=3)
                 except queue.Empty:
                     pass
 
-            self.process_message(aapa_kwargs)
+            self.try_to_complete(aapa_kwargs)
+
+
+REDIS_REQUEST_KEY = 'otree-wait-page-request'
+REDIS_RESPONSE_KEY = 'otree-wait-page-response'
+
+request_queue = queue.Queue()
+response_queue = queue.Queue()
+
+def try_to_complete(aapa_kwargs):
+    if otree.common_internal.USE_REDIS:
+        redis_conn = otree.common_internal.get_redis_conn()
+        redis_conn.rpush(REDIS_REQUEST_KEY, json.dumps(aapa_kwargs))
+        #return redis_conn.blpop(REDIS_RESPONSE_KEY, timeout=timeout)
+    else:
+        request_queue.put(aapa_kwargs)
+        #try:
+        #    return response_queue.get(timeout=timeout)
+        #except queue.Empty:
+        #    return

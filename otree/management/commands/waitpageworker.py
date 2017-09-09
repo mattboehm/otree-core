@@ -1,9 +1,7 @@
 import logging
 from django.core.management.base import BaseCommand
 from otree.common_internal import get_redis_conn
-
-
-
+from otree.waitpage import WaitPageWorkerRedis
 
 
 class Command(BaseCommand):
@@ -11,6 +9,5 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         redis_conn = get_redis_conn()
-        worker = WaitPageWorker(redis_conn)
-        worker.listen_redis()
-
+        worker = WaitPageWorkerRedis(redis_conn)
+        worker.listen()

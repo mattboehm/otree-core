@@ -230,7 +230,7 @@ class FormPageOrInGameWaitPage(vanilla.View):
             'subsession': self.subsession,
             'session': self.session,
             'participant': self.participant,
-            'Constants': self._models_module.Constants,
+            'Constants': self._Constants,
 
             # doesn't exist on wait pages, so need getattr
             'timer_text': getattr(self, 'timer_text', None)
@@ -373,7 +373,8 @@ class FormPageOrInGameWaitPage(vanilla.View):
         self.participant._last_request_timestamp = time.time()
 
         models_module = otree.common_internal.get_models_module(app_name)
-        self._models_module = models_module
+        # use the underscore because this is private API
+        self._Constants = models_module.Constants
         self.SubsessionClass = getattr(models_module, 'Subsession')
         self.GroupClass = getattr(models_module, 'Group')
         self.PlayerClass = getattr(models_module, 'Player')
@@ -447,7 +448,7 @@ class FormPageOrInGameWaitPage(vanilla.View):
                 if not unvisited:
                     page._mark_complete()
                     participant_pk_set = set(
-                        page._group_or_subsession.player_set.values_list(
+                        page._aapa_scope_object.player_set.values_list(
                             'participant__pk', flat=True))
                     page.send_completion_message(participant_pk_set)
 
@@ -960,7 +961,18 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             # for the last player.
             return self._response_when_ready()
 
-        if not self.group_by_arrival_time:
+        if self.group_by_arrival_time:
+            self.player._group_by_arrival_time_arrived = True
+            # need to save so that the consumer thread knows this one is waiting,
+            self.player.save() # for waiting status
+
+            # _last_request_timestamp is already set in set_attributes,
+            # but set it here just so we can guarantee
+            self.participant._last_request_timestamp = time.time()
+            # save to DB for consumer thread
+            self.participant.save() # for timestamp
+
+        else:
             # take a lock because we set "waiting for" list here
             unvisited = self._tally_unvisited()
             if unvisited:
@@ -976,24 +988,17 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             group_by_arrival_time=self.group_by_arrival_time,
         )
 
-        if not self.wait_for_all_groups:
+        if not (self.wait_for_all_groups or self.group_by_arrival_time):
             aapa_kwargs.update(dict(
                 group_id=self.group.id,
                 group_id_in_subsession=self.group.id_in_subsession,
             ))
 
-        otree.waitpage.send_message(aapa_kwargs)
-
-        # give AAPA time to execute in a separate thread
-        start_time = time.time()
-        while time.time() - start_time < 2:
-            if self._is_completed():
-                return self._save_objects_and_response_when_ready()
-            time.sleep(0.15)
+        otree.waitpage.try_to_complete(aapa_kwargs)
         return self._get_wait_page()
 
     @property
-    def _group_or_subsession(self):
+    def _aapa_scope_object(self):
         return self.subsession if self.wait_for_all_groups else self.group
 
     def send_completion_message(self, participant_pk_set):
@@ -1008,7 +1013,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
                     'participant_pk_set': participant_pk_set},
                 delay=10)
 
-        # _group_or_subsession might be deleted
+        # _aapa_scope_object might be deleted
         # in after_all_players_arrive, but it won't delete the cached model
         channels_group_name = self.get_channels_group_name()
         channels.Group(channels_group_name).send(
@@ -1071,7 +1076,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         """side effect: set _waiting_for_ids"""
 
         participant_ids = set(
-            self._group_or_subsession.player_set.values_list(
+            self._aapa_scope_object.player_set.values_list(
                 'participant_id', flat=True))
 
         participant_data = Participant.objects.filter(
@@ -1116,7 +1121,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         pass
 
     def _get_default_body_text(self):
-        num_other_players = len(self._group_or_subsession.get_players()) - 1
+        num_other_players = len(self._aapa_scope_object.get_players()) - 1
         if num_other_players > 1:
             return _('Waiting for the other participants.')
         if num_other_players == 1:
@@ -1126,19 +1131,6 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
     ## THE REST OF THIS CLASS IS GROUP_BY_ARRIVAL_TIME STUFF
 
     def _gbat_try_to_regroup(self):
-
-        GroupClass = type(self.group)
-
-        self.player._group_by_arrival_time_arrived = True
-        # need to save so that other players making simultaneous requests
-        # immediately know this one is waiting, and made a request recently
-        self.player.save() # for waiting status
-
-        # _last_request_timestamp is already set in set_attributes,
-        # but set it here just so we can guarantee
-        self.participant._last_request_timestamp = time.time()
-        # save to DB so simultaneous requests can read it properly
-        self.participant.save() # for timestamp
 
         # if someone arrives within this many seconds of the last heartbeat of
         # a player who drops out, they will be stuck.
@@ -1172,10 +1164,9 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
 
         group_id_in_subsession = self._gbat_next_group_id_in_subsession()
 
-        Constants = self._models_module.Constants
 
         with otree.common_internal.transaction_except_for_sqlite():
-            for round_number in range(self.round_number, Constants.num_rounds+1):
+            for round_number in range(self.round_number, self._Constants.num_rounds+1):
                 subsession = self.subsession.in_round(round_number)
 
                 unordered_players = subsession.player_set.filter(
@@ -1193,10 +1184,14 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
                         player._group_by_arrival_time_grouped = True
                         player.save()
 
-                group = GroupClass.objects.create(
+                group = self.GroupClass.objects.create(
                     subsession=subsession, id_in_subsession=group_id_in_subsession,
                     session=self.session, round_number=round_number)
                 group.set_players(ordered_players_for_group)
+                if round_number == self.round_number:
+                    # so that we can run after_all_players_arrive afterward
+                    self.group = group
+
 
                 # prune groups without players
                 # apparently player__isnull=True works, didn't know you could
@@ -1205,7 +1200,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         return True
 
     def get_players_for_group(self, waiting_players):
-        Constants = self._models_module.Constants
+        Constants = self._Constants
 
         if Constants.players_per_group is None:
             raise AssertionError(
@@ -1228,7 +1223,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         # doesn't start from 1.
         # especially if you do group_by_arrival_time in every round
         # is that a problem?
-        res = type(self.group).objects.filter(
+        res = self.GroupClass.objects.filter(
             session=self.session).aggregate(Max('id_in_subsession'))
         return res['id_in_subsession__max'] + 1
 
