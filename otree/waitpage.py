@@ -1,4 +1,5 @@
 import queue
+from django.conf import settings
 import logging
 from otree.models_concrete import (
     CompletedGroupWaitPage, CompletedSubsessionWaitPage,
@@ -12,6 +13,7 @@ import threading
 from otree.common_internal import get_views_module
 from django.apps import apps
 import channels
+import redis_lock
 
 logger = logging.getLogger('otree.waitpageworker')
 
@@ -29,8 +31,16 @@ class AfterAllPlayersArrive:
             try:
                 self.inner_try()
             except Exception as exc:
-                error_message = repr(exc)
-                traceback_str = traceback.format_exc()
+                if settings.DEBUG:
+                    error_message = repr(exc)
+                    traceback_str = traceback.format_exc()
+                else:
+                    error_message = (
+                        'An error occurred. '
+                        'If you are the administrator, please see the logs '
+                        'or enable DEBUG mode.'
+                    )
+                    traceback_str = '(No exception info available)'
 
                 wp = self.wp
                 channels_group = channels.Group(wp.get_channels_group_name())
@@ -44,7 +54,6 @@ class AfterAllPlayersArrive:
                         )
                     }
                 )
-
                 FailedWaitPageExecution.objects.create(
                     page_index=self.index_in_pages,
                     session_id=self.session_id,
@@ -52,9 +61,7 @@ class AfterAllPlayersArrive:
                     message=error_message[:FAILURE_MESSAGE_MAX_LENGTH],
                     traceback=traceback_str
                 )
-                logger.exception(msg='Error in wait page worker')
-                # logging doesn't print anything for bots
-                #print(traceback.format_exc())
+                raise
 
     def inner_try(self):
         self.complete_aapa()
@@ -156,42 +163,52 @@ class WorkerBase:
             consumer = AfterAllPlayersArrive(aapa_kwargs)
         consumer.try_to_complete()
 
+    def listen(self):
+        '''
+        Wrap exceptions so that the process doesn't crash
+        when there is an error, especially in the user's code.
+        We wrap exceptions at this level rather than inside try_to_complete,
+        because bots call that directly, and for bots we need to bubble up
+        errors
+        '''
+        while True:
+            aapa_kwargs = self.get_next_aapa_kwargs()
+            try:
+                self.try_to_complete(aapa_kwargs)
+            except Exception as exc:
+                logger.exception(repr(exc))
+
+    def get_next_aapa_kwargs(self):
+        raise NotImplementedError()
+
 
 class RedisWorker(WorkerBase):
     def __init__(self, redis_conn=None):
         self.redis_conn = redis_conn
-
-    def listen(self):
         print('waitpageworker is listening for messages through Redis')
+
+    def get_next_aapa_kwargs(self):
+        # put it in a loop so that we can still receive KeyboardInterrupts
+        # otherwise it will block
         while True:
+            result = self.redis_conn.blpop(REDIS_REQUEST_KEY, timeout=3)
+            if result is not None:
+                break
 
-            # blpop returns a tuple
-            result = None
-
-            # put it in a loop so that we can still receive KeyboardInterrupts
-            # otherwise it will block
-            while result is None:
-                result = self.redis_conn.blpop(REDIS_REQUEST_KEY, timeout=3)
-
-            key, message_bytes = result
-            aapa_kwargs = json.loads(message_bytes.decode('utf-8'))
-            self.try_to_complete(aapa_kwargs)
+        key, message_bytes = result
+        aapa_kwargs = json.loads(message_bytes.decode('utf-8'))
+        return aapa_kwargs
 
 
 class InProcessWorker(WorkerBase):
-    def listen(self):
+    def get_next_aapa_kwargs(self):
+        # put it in a loop so that we can still receive KeyboardInterrupts
+        # otherwise it will block
         while True:
-            aapa_kwargs = None
-
-            # put it in a loop so that we can still receive KeyboardInterrupts
-            # otherwise it will block
-            while aapa_kwargs is None:
-                try:
-                    aapa_kwargs = request_queue.get(timeout=3)
-                except queue.Empty:
-                    pass
-
-            self.try_to_complete(aapa_kwargs)
+            try:
+                return request_queue.get(timeout=3)
+            except queue.Empty:
+                pass
 
 
 class WaitPageThread(threading.Thread):

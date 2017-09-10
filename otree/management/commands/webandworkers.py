@@ -22,7 +22,7 @@ naiveip_re = re.compile(r"""^(?:
 
 DEFAULT_PORT = "8000"
 DEFAULT_ADDR = '0.0.0.0'
-NUM_WORKERS = 3
+NUM_WORKERS = 2
 
 # made this simple class to reduce code duplication,
 # and to make testing easier (I didn't know how to check that it was called

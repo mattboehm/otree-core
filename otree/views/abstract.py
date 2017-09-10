@@ -1061,7 +1061,12 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             session=self.session).exists()
 
     def _tally_unvisited(self):
-        """side effect: set _waiting_for_ids"""
+        """
+        side effect: set _waiting_for_ids
+        It's OK to do this outside a lock,
+        because it doesn't rely on any cached data,
+        so the last one that gets executed will be the most correct.
+        """
 
         participant_ids = set(
             self._aapa_scope_object.player_set.values_list(

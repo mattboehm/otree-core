@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 import json
 import logging
 import django.db
@@ -21,7 +18,8 @@ from otree.common_internal import (
     channels_room_participants_group_name
 )
 from otree.models_concrete import (
-    FailedSessionCreation, ParticipantRoomVisit,
+    FailedSessionCreation, FailedWaitPageExecution,
+    ParticipantRoomVisit,
     FAILURE_MESSAGE_MAX_LENGTH, BrowserBotsLauncherSessionCode)
 from otree.room import ROOM_DICT
 
@@ -92,6 +90,9 @@ class GroupByArrivalTime(OTreeJsonWebsocketConsumer):
         group_id_in_subsession = GroupClass.objects.filter(
             player__id=player_id).values_list('id_in_subsession', flat=True)[0]
 
+        # group_id_in_subsession may be the old or new one,
+        # but if it's the old group_id_in_subsession, then there cannot be
+        # a Completion object. So this always detects if it's complete.
         ready = CompletedGroupWaitPage.objects.filter(
             page_index=page_index,
             id_in_subsession=group_id_in_subsession,
@@ -99,7 +100,19 @@ class GroupByArrivalTime(OTreeJsonWebsocketConsumer):
         ).exists()
         if ready:
             self.send({'status': 'ready'})
-
+        # this code is duplicated in WaitPage
+        failure = FailedWaitPageExecution.objects.filter(
+            page_index=page_index,
+            session_id=session_pk,
+            group_id_in_subsession=group_id_in_subsession
+        ).first()
+        if failure:
+            self.send(
+                    {
+                        'error': failure.message,
+                        'traceback': failure.traceback
+                    }
+            )
 
 class WaitPage(OTreeJsonWebsocketConsumer):
 
@@ -129,6 +142,20 @@ class WaitPage(OTreeJsonWebsocketConsumer):
                 session_id=session_pk).exists()
         if ready:
             self.send({'status': 'ready'})
+        # in case message was sent before this web socket connects
+        # this code is duplicated in GBAT
+        failure = FailedWaitPageExecution.objects.filter(
+            page_index=page_index,
+            session_id=session_pk,
+            group_id_in_subsession=group_id_in_subsession
+        ).first()
+        if failure:
+            self.send(
+                    {
+                        'error': failure.message,
+                        'traceback': failure.traceback
+                    }
+            )
 
 
 class AutoAdvance(OTreeJsonWebsocketConsumer):
