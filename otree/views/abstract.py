@@ -961,6 +961,8 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             # for the last player.
             return self._response_when_ready()
 
+        aapa_kwargs = {}
+
         if self.group_by_arrival_time:
             self.player._group_by_arrival_time_arrived = True
             # need to save so that the consumer thread knows this one is waiting,
@@ -971,6 +973,9 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             self.participant._last_request_timestamp = time.time()
             # save to DB for consumer thread
             self.participant.save() # for timestamp
+            # need to do this once per player, so do it here instead of worker
+            aapa_kwargs['player_id'] = self.player.id
+
 
         else:
             # take a lock because we set "waiting for" list here
@@ -979,14 +984,14 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
                 self.participant.is_on_wait_page = True
                 return self._get_wait_page()
 
-        aapa_kwargs = dict(
+        aapa_kwargs.update(dict(
             app_label=self.subsession._meta.app_label,
             page_name=self.__class__.__name__,
             subsession_id=self.subsession.id,
             session_id=self.session.id,
             index_in_pages=self._index_in_pages,
             group_by_arrival_time=self.group_by_arrival_time,
-        )
+        ))
 
         if not (self.wait_for_all_groups or self.group_by_arrival_time):
             aapa_kwargs.update(dict(
@@ -1121,7 +1126,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         pass
 
     def _get_default_body_text(self):
-        num_other_players = len(self._aapa_scope_object.get_players()) - 1
+        num_other_players = self._aapa_scope_object.player_set.count() - 1
         if num_other_players > 1:
             return _('Waiting for the other participants.')
         if num_other_players == 1:
@@ -1130,7 +1135,11 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
 
     ## THE REST OF THIS CLASS IS GROUP_BY_ARRIVAL_TIME STUFF
 
-    def _gbat_try_to_regroup(self):
+    def _gbat_get_waiting_player_ids(self):
+        '''maybe can be re-merged with try_to_regroup.
+        at one point i thought that this needs to be called in page request,
+        and other one in wait-page-worker, but i don't think so.
+        '''
 
         # if someone arrives within this many seconds of the last heartbeat of
         # a player who drops out, they will be stuck.
@@ -1149,13 +1158,17 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             _group_by_arrival_time_arrived=True,
             _group_by_arrival_time_grouped=False,
             participant___last_request_timestamp__gte=time.time()-STALE_THRESHOLD_SECONDS
-        ))
+        ).values_list('id', flat=True))
 
         # should never be empty
         assert waiting_players
+        return waiting_players
+
+    def _gbat_try_to_regroup(self, waiting_player_ids):
 
         self.player = self.participant = self.group = Undefined_GetPlayersForGroup()
 
+        waiting_players = self.subsession.player_set.filter(id__in=waiting_player_ids)
         players_for_group = self.get_players_for_group(waiting_players)
 
         if not players_for_group:
@@ -1212,11 +1225,11 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             )
 
         # we're locking, so it shouldn't be more
-        if len(waiting_players) > Constants.players_per_group:
-            raise AssertionError('Too many waiting players', waiting_players)
+        #if len(waiting_players) > Constants.players_per_group:
+        #    raise AssertionError('Too many waiting players', waiting_players)
 
-        if len(waiting_players) == Constants.players_per_group:
-            return waiting_players
+        if len(waiting_players) >= Constants.players_per_group:
+            return waiting_players[:Constants.players_per_group]
 
     def _gbat_next_group_id_in_subsession(self):
         # 2017-05-05: seems like this can result in id_in_subsession that

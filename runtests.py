@@ -1,18 +1,7 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-# =============================================================================
-# IMPORTS
-# =============================================================================
-
 import os
 import sys
 import logging
 
-
-# =============================================================================
-# CONF
-# =============================================================================
 
 base_path = os.path.dirname(os.path.abspath(__file__))
 tests_path = os.path.join(base_path, "tests")
@@ -28,10 +17,6 @@ default_test_apps = ('tests',)
 loggers = ["otree", "raven"]
 
 
-# =============================================================================
-# FUNCTIONS
-# =============================================================================
-
 def runtests(argv):
     import django
     django.setup()
@@ -40,6 +25,8 @@ def runtests(argv):
 
     class TestCommand(Command):
         def execute(self, *args, **options):
+            import otree.common_internal
+            otree.common_internal.USING_CLI_BOTS = True
             if not args:
                 args = default_test_apps
             return super(TestCommand, self).execute(*args, **options)
@@ -51,10 +38,6 @@ def runtests(argv):
     test_command = TestCommand()
     test_command.run_from_argv(argv[0:1] + ['test'] + argv[1:])
 
-
-# =============================================================================
-# MAIN
-# =============================================================================
 
 if __name__ == '__main__':
     runtests(sys.argv)

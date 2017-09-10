@@ -2,11 +2,11 @@ import queue
 import logging
 from otree.models_concrete import (
     CompletedGroupWaitPage, CompletedSubsessionWaitPage)
-from otree.common_internal import get_models_module
 import json
 import traceback
 import otree.common_internal
 from otree.db.idmap import use_cache, save_objects
+import threading
 
 logger = logging.getLogger('otree.waitpageworker')
 
@@ -38,15 +38,16 @@ class AfterAllPlayersArriveSingleThreaded:
         app_name = app_config.name
         self.GroupClass = app_config.get_model('Group')
         self.SubsessionClass = app_config.get_model('Subsession')
+        self.PlayerClass = app_config.get_model('Player')
         views_module = get_views_module(app_name)
         WaitPageClass = getattr(views_module, kwargs['page_name'])
         self.index_in_pages = kwargs['index_in_pages']
+        self.player_id = kwargs.get('player_id') # only for GBAT
         self.group_id = kwargs.get('group_id')
         self.group_id_in_subsession = kwargs.get('group_id_in_subsession')
         # for WaitPageCompletion
         self.subsession_id = kwargs['subsession_id']
         self.session_id = kwargs['session_id']
-
         self.wp = WaitPageClass() # type: otree.views.abstract.WaitPage
 
 
@@ -105,10 +106,22 @@ class AfterAllPlayersArriveSingleThreaded:
 class GroupByArrivalTimeSingleThreaded(AfterAllPlayersArriveSingleThreaded):
 
     def inner_try(self):
-        regrouped = self.wp._gbat_try_to_regroup()
+        player_ids = self.wp._gbat_get_waiting_player_ids()
+        regrouped = self.wp._gbat_try_to_regroup(player_ids)
         if regrouped:
             return self.complete_aapa()
         return False
+
+    def was_already_completed(self):
+
+        group_id_in_subsession = self.GroupClass.objects.filter(
+            player__id=self.player_id).values_list('id_in_subsession', flat=True)[0]
+
+        return CompletedGroupWaitPage.objects.filter(
+            page_index=self.index_in_pages,
+            id_in_subsession=group_id_in_subsession,
+            session_id=self.session_id
+        ).exists()
 
 
 
@@ -134,9 +147,6 @@ class WaitPageWorkerBase:
 class WaitPageWorkerRedis(WaitPageWorkerBase):
     def __init__(self, redis_conn=None):
         self.redis_conn = redis_conn
-
-    def ping(self, *args, **kwargs):
-        return {'ok': True}
 
     def listen(self):
         print('waitpageworker is listening for messages through Redis')
@@ -172,6 +182,18 @@ class WaitPageWorkerInProcess(WaitPageWorkerBase):
             self.try_to_complete(aapa_kwargs)
 
 
+
+class WaitPageWorkerThread(threading.Thread):
+
+    def __init__(self):
+        # daemon means that KeyboardInterrput will stop the process
+        super().__init__(daemon=True)
+
+    def run(self):
+        logger.debug("Wait page worker thread running")
+        WaitPageWorkerInProcess().listen()
+
+
 REDIS_REQUEST_KEY = 'otree-wait-page-request'
 REDIS_RESPONSE_KEY = 'otree-wait-page-response'
 
@@ -179,7 +201,9 @@ request_queue = queue.Queue()
 response_queue = queue.Queue()
 
 def try_to_complete(aapa_kwargs):
-    if otree.common_internal.USE_REDIS:
+    if getattr(otree.common_internal, 'USING_CLI_BOTS', False):
+        WaitPageWorkerInProcess().try_to_complete(aapa_kwargs)
+    elif otree.common_internal.USE_REDIS:
         redis_conn = otree.common_internal.get_redis_conn()
         redis_conn.rpush(REDIS_REQUEST_KEY, json.dumps(aapa_kwargs))
         #return redis_conn.blpop(REDIS_RESPONSE_KEY, timeout=timeout)

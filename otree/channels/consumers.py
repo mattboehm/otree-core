@@ -87,13 +87,14 @@ class GroupByArrivalTime(OTreeJsonWebsocketConsumer):
             session_pk, page_index)
 
     def post_connect(self, app_name, player_id, page_index, session_pk):
-        models_module = get_models_module(app_name)
-        player = models_module.Player.objects.get(id=player_id)
-        group_id_in_subsession = player.group.id_in_subsession
+        GroupClass = get_models_module(app_name).Group
+
+        group_id_in_subsession = GroupClass.objects.filter(
+            player__id=player_id).values_list('id_in_subsession', flat=True)[0]
 
         ready = CompletedGroupWaitPage.objects.filter(
             page_index=page_index,
-            id_in_subsession=int(group_id_in_subsession),
+            id_in_subsession=group_id_in_subsession,
             session_id=session_pk
         ).exists()
         if ready:
