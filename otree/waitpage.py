@@ -139,9 +139,9 @@ class WaitPageWorkerBase:
                 'traceback': traceback.format_exc()
             }
             # TODO: create a DB record called FailedWaitPageExecution
-            # don't raise, because then this would crash.
-            # logger.exception() will record the full traceback
             logger.exception(repr(exc))
+            # 2017-09-10: need to raise, for bots
+            raise
 
 
 class WaitPageWorkerRedis(WaitPageWorkerBase):
