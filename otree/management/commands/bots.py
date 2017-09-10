@@ -6,7 +6,7 @@ from django.core.management.base import BaseCommand
 
 import otree.bots.runner
 from otree.bots.runner import run_pytests
-from otree.waitpage import WaitPageWorkerThread
+from otree.waitpage import WaitPageThread
 import otree.common_internal
 
 logger = logging.getLogger('otree')

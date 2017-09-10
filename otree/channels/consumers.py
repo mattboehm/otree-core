@@ -197,7 +197,6 @@ def create_session(message):
         )
 
 
-
 class WaitForSession(OTreeJsonWebsocketConsumer):
     def clean_kwargs(self, **kwargs):
         return kwargs

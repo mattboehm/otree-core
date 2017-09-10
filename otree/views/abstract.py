@@ -349,18 +349,10 @@ class FormPageOrInGameWaitPage(vanilla.View):
         self._round_number = value
 
     def set_attributes(self, participant, lazy=False):
-        """
-        Even though we only use PlayerClass in set_attributes,
-        we use {Group/Subsession}Class elsewhere.
-        """
-
         self.participant = participant
 
         # it's already validated that participant is on right page
         self._index_in_pages = participant._index_in_pages
-
-        # temp, for page template
-        self.index_in_pages = self._index_in_pages
 
         player_lookup = participant.player_lookup()
 
@@ -787,9 +779,6 @@ class Page(FormPageOrInGameWaitPage):
     timer_text = ugettext_lazy("Time left to complete this page:")
 
 
-
-
-
 _MSG_Undefined_GetPlayersForGroup = (
     'You cannot reference self.player, self.group, or self.participant '
     'inside get_players_for_group.'
@@ -965,20 +954,17 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
 
         if self.group_by_arrival_time:
             self.player._group_by_arrival_time_arrived = True
-            # need to save so that the consumer thread knows this one is waiting,
-            self.player.save() # for waiting status
+            # save to DB for wait page worker
+            self.player.save()
 
             # _last_request_timestamp is already set in set_attributes,
             # but set it here just so we can guarantee
             self.participant._last_request_timestamp = time.time()
-            # save to DB for consumer thread
+            # save to DB for wait page worker
             self.participant.save() # for timestamp
-            # need to do this once per player, so do it here instead of worker
             aapa_kwargs['player_id'] = self.player.id
 
-
         else:
-            # take a lock because we set "waiting for" list here
             unvisited = self._tally_unvisited()
             if unvisited:
                 self.participant.is_on_wait_page = True
@@ -1018,8 +1004,6 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
                     'participant_pk_set': participant_pk_set},
                 delay=10)
 
-        # _aapa_scope_object might be deleted
-        # in after_all_players_arrive, but it won't delete the cached model
         channels_group_name = self.get_channels_group_name()
         channels.Group(channels_group_name).send(
             {'text': json.dumps(
@@ -1067,7 +1051,6 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             )
 
     def _is_completed(self):
-        """all participants visited, AND action has been run"""
         if self.wait_for_all_groups:
             return CompletedSubsessionWaitPage.objects.filter(
                 page_index=self._index_in_pages,
@@ -1135,6 +1118,29 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
 
     ## THE REST OF THIS CLASS IS GROUP_BY_ARRIVAL_TIME STUFF
 
+    # only called from wait page worker
+    def _gbat_next_group_id_in_subsession(self):
+        # 2017-05-05: seems like this can result in id_in_subsession that
+        # doesn't start from 1.
+        # especially if you do group_by_arrival_time in every round
+        # is that a problem?
+        res = self.GroupClass.objects.filter(
+            session=self.session).aggregate(Max('id_in_subsession'))
+        return res['id_in_subsession__max'] + 1
+
+
+    def _gbat_get_channels_group_name(self):
+            return otree.common_internal.channels_group_by_arrival_time_group_name(
+                session_pk=self.session.pk, page_index=self._index_in_pages,
+            )
+
+    def _gbat_socket_url(self):
+        return '/group_by_arrival_time/{},{},{},{}/'.format(
+            self.session.id, self._index_in_pages,
+            self.player._meta.app_config.name, self.player.id)
+
+
+    # below methods only executed by wait page worker
     def _gbat_get_waiting_player_ids(self):
         '''maybe can be re-merged with try_to_regroup.
         at one point i thought that this needs to be called in page request,
@@ -1164,6 +1170,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         assert waiting_players
         return waiting_players
 
+    # only called from wait page worker
     def _gbat_try_to_regroup(self, waiting_player_ids):
 
         self.player = self.participant = self.group = Undefined_GetPlayersForGroup()
@@ -1176,7 +1183,6 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
         participant_ids = [p.participant.id for p in players_for_group]
 
         group_id_in_subsession = self._gbat_next_group_id_in_subsession()
-
 
         with otree.common_internal.transaction_except_for_sqlite():
             for round_number in range(self.round_number, self._Constants.num_rounds+1):
@@ -1205,7 +1211,6 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
                     # so that we can run after_all_players_arrive afterward
                     self.group = group
 
-
                 # prune groups without players
                 # apparently player__isnull=True works, didn't know you could
                 # use this in a reverse direction.
@@ -1224,32 +1229,9 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
                 )
             )
 
-        # we're locking, so it shouldn't be more
-        #if len(waiting_players) > Constants.players_per_group:
-        #    raise AssertionError('Too many waiting players', waiting_players)
-
         if len(waiting_players) >= Constants.players_per_group:
             return waiting_players[:Constants.players_per_group]
 
-    def _gbat_next_group_id_in_subsession(self):
-        # 2017-05-05: seems like this can result in id_in_subsession that
-        # doesn't start from 1.
-        # especially if you do group_by_arrival_time in every round
-        # is that a problem?
-        res = self.GroupClass.objects.filter(
-            session=self.session).aggregate(Max('id_in_subsession'))
-        return res['id_in_subsession__max'] + 1
-
-
-    def _gbat_get_channels_group_name(self):
-            return otree.common_internal.channels_group_by_arrival_time_group_name(
-                session_pk=self.session.pk, page_index=self._index_in_pages,
-            )
-
-    def _gbat_socket_url(self):
-        return '/group_by_arrival_time/{},{},{},{}/'.format(
-            self.session.id, self._index_in_pages,
-            self.player._meta.app_config.name, self.player.id)
 
 
 class GetFloppyFormClassMixin:

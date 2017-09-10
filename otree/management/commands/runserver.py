@@ -6,7 +6,7 @@ import otree.bots.browser
 from django.conf import settings
 import otree.common_internal
 
-from otree.waitpage import WaitPageWorkerThread
+from otree.waitpage import WaitPageThread
 
 class Command(runserver.Command):
 
@@ -39,7 +39,7 @@ class Command(runserver.Command):
         otree.bots.browser.browser_bot_worker = otree.bots.browser.Worker()
 
         # start will run .run() in a separate thread
-        WaitPageWorkerThread().start()
+        WaitPageThread().start()
         super().inner_run(*args, **options)
 
 

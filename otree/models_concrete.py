@@ -115,6 +115,17 @@ class FailedSessionCreation(models.Model):
     traceback = models.TextField(default='')
 
 
+class FailedWaitPageExecution(models.Model):
+    class Meta:
+        app_label = "otree"
+
+    page_index = models.PositiveIntegerField()
+    session = models.ForeignKey('otree.Session')
+    group_id_in_subsession = models.PositiveIntegerField(null=True)
+    message = models.CharField(max_length=FAILURE_MESSAGE_MAX_LENGTH)
+    traceback = models.TextField(default='')
+
+
 class ParticipantRoomVisit(models.Model):
     class Meta:
         app_label = "otree"
