@@ -141,7 +141,7 @@ class FormPageOrInGameWaitPage(vanilla.View):
 
     template_name = None
 
-    is_debug = settings.DEBUG
+    is_debug_ = settings.DEBUG
 
     def inner_dispatch(self):
         '''inner dispatch function'''
@@ -1272,7 +1272,7 @@ class AdminSessionPageMixin(GetFloppyFormClassMixin):
         context = super().get_context_data(**kwargs)
         context.update({
             'session': self.session,
-            'is_debug': settings.DEBUG})
+            'is_debug_': settings.DEBUG})
         return context
 
     def get_template_names(self):

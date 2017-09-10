@@ -658,7 +658,7 @@ class AdminReport(AdminSessionPageMixin, vanilla.TemplateView):
             )
         ]
         # determine whether to display debug tables
-        self.is_debug = settings.DEBUG
+        self.is_debug_ = settings.DEBUG
         context.update(vars_for_admin_report)
 
         # this should take priority, in the event of a clash between
@@ -678,7 +678,7 @@ class Sessions(vanilla.ListView):
     def get_context_data(self, **kwargs):
         context = super(Sessions, self).get_context_data(**kwargs)
         context.update({
-            'is_debug': settings.DEBUG,
+            'is_debug_': settings.DEBUG,
         })
         return context
 

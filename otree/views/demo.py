@@ -46,7 +46,7 @@ class DemoIndex(vanilla.TemplateView):
             'session_info': session_info,
             'title': title,
             'intro_html': intro_html,
-            'is_debug': settings.DEBUG,
+            'is_debug_': settings.DEBUG,
         })
         return context
 
