@@ -5,9 +5,10 @@ import otree.waitpage
 
 
 class Command(BaseCommand):
-    help = "oTree: Run the worker for browser bots."
+    help = "oTree: Run the worker for wait pages."
 
     def handle(self, *args, **options):
         redis_conn = get_redis_conn()
+        otree.waitpage.flush_redis(redis_conn)
         worker = otree.waitpage.RedisWorker(redis_conn)
         worker.listen()

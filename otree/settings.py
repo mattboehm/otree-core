@@ -87,6 +87,11 @@ def get_default_settings(initial_settings=None):
                 'propagate': False,
                 'level': 'INFO',
             },
+            'otree.waitpageworker': {
+                'handlers': ['sentry', 'console'],
+                'propagate': False,
+                'level': 'INFO',
+            },
             'django.request': {
                 'handlers': ['console'],
                 'propagate': True,

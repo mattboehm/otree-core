@@ -160,11 +160,10 @@ class MTurkStart(vanilla.View):
                 mturk_worker_id=worker_id)
         except Participant.DoesNotExist:
             with global_scoped_db_lock():
-                try:
-                    participant = self.session.get_participants().filter(
-                        visited=False
-                    ).order_by('start_order')[0]
-                except IndexError:
+                participant = self.session.participant_set.filter(
+                    visited=False
+                ).order_by('start_order').first()
+                if not participant:
                     return HttpResponseNotFound(NO_PARTICIPANTS_LEFT_MSG)
 
                 # 2014-10-17: needs to be here even if it's also set in
@@ -437,7 +436,7 @@ class BrowserBotStartLink(GenericWaitPageMixin, vanilla.View):
         if session_info:
             session = Session.objects.get(code=session_info.code)
             with global_scoped_db_lock():
-                participant = session.get_participants().filter(
+                participant = session.participant_set.filter(
                     visited=False).order_by('start_order').first()
                 if not participant:
                     return HttpResponseNotFound(NO_PARTICIPANTS_LEFT_MSG)

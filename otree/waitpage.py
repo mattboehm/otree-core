@@ -52,7 +52,9 @@ class AfterAllPlayersArrive:
                     message=error_message[:FAILURE_MESSAGE_MAX_LENGTH],
                     traceback=traceback_str
                 )
-                raise
+                logger.exception(msg='Error in wait page worker')
+                # logging doesn't print anything for bots
+                #print(traceback.format_exc())
 
     def inner_try(self):
         self.complete_aapa()
@@ -203,7 +205,6 @@ class WaitPageThread(threading.Thread):
 
 
 REDIS_REQUEST_KEY = 'otree-wait-page-request'
-REDIS_RESPONSE_KEY = 'otree-wait-page-response'
 
 request_queue = queue.Queue()
 response_queue = queue.Queue()
@@ -217,3 +218,7 @@ def try_to_complete(aapa_kwargs):
         redis_conn.rpush(REDIS_REQUEST_KEY, json.dumps(aapa_kwargs))
     else:
         request_queue.put(aapa_kwargs)
+
+
+def flush_redis(redis_conn):
+    redis_conn.delete(REDIS_REQUEST_KEY)
