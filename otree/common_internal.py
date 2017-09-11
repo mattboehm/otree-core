@@ -3,6 +3,7 @@
 from __future__ import absolute_import
 
 import hashlib
+import json
 import logging
 import os
 import random
@@ -372,3 +373,14 @@ def _get_all_configs():
         for app in apps.get_app_configs()
         if app.name in settings.INSTALLED_OTREE_APPS]
 
+
+def load_redis_response_dict(response_bytes):
+    response = json.loads(response_bytes.decode('utf-8'))
+    # response_error only exists if using Redis.
+    # if using runserver, there is no need for this because the
+    # exception is raised in the same thread.
+    if 'traceback' in response:
+        # cram the other traceback in this traceback message.
+        # note:
+        raise Exception(response['traceback'])
+    return response

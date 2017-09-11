@@ -4,21 +4,18 @@
 from __future__ import absolute_import
 
 import json
-import threading
 import logging
+import threading
+import traceback
 from collections import OrderedDict
 
-from django.test import SimpleTestCase
-
 import channels
-import traceback
-
 import otree.common_internal
+from django.test import SimpleTestCase
+from otree.common_internal import get_redis_conn, load_redis_response_dict
 from otree.models.participant import Participant
-from otree.common_internal import get_redis_conn
 
 from .bot import ParticipantBot
-
 
 REDIS_KEY_PREFIX = 'otree-bots'
 
@@ -218,18 +215,6 @@ def ping_bool(redis_conn, unique_response_code):
         return True
     except BotWorkerPingError:
         return False
-
-
-def load_redis_response_dict(response_bytes):
-    response = json.loads(response_bytes.decode('utf-8'))
-    # response_error only exists if using Redis.
-    # if using runserver, there is no need for this because the
-    # exception is raised in the same thread.
-    if 'traceback' in response:
-        # cram the other traceback in this traceback message.
-        # note:
-        raise Exception(response['traceback'])
-    return response
 
 
 def initialize_bot_redis(redis_conn, participant_code):

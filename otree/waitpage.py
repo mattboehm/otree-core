@@ -3,7 +3,6 @@ from django.conf import settings
 import logging
 from otree.models_concrete import (
     CompletedGroupWaitPage, CompletedSubsessionWaitPage,
-    FailedWaitPageExecution, FAILURE_MESSAGE_MAX_LENGTH
 )
 import json
 import traceback
@@ -22,49 +21,17 @@ class AfterAllPlayersArrive:
     def __init__(self, aapa_kwargs):
         self.set_non_model_attributes(aapa_kwargs)
 
-    def try_to_complete(self):
+    def try_to_complete(self) -> str:
         if self.was_already_completed():
-            return
+            return ResponseCode.COMPLETE
 
         with use_cache():
             self.set_wait_page_attributes()
-            try:
-                self.inner_try()
-            except Exception as exc:
-                if settings.DEBUG:
-                    error_message = repr(exc)
-                    traceback_str = traceback.format_exc()
-                else:
-                    error_message = (
-                        'An error occurred. '
-                        'If you are the administrator, please see the logs '
-                        'or enable DEBUG mode.'
-                    )
-                    traceback_str = '(No exception info available)'
+            return self.inner_try()
 
-                wp = self.wp
-                channels_group = channels.Group(wp.get_channels_group_name())
-                channels_group.send(
-                    {
-                        'text': json.dumps(
-                            {
-                                'error': error_message,
-                                'traceback': traceback_str,
-                            }
-                        )
-                    }
-                )
-                FailedWaitPageExecution.objects.create(
-                    page_index=self.index_in_pages,
-                    session_id=self.session_id,
-                    group_id_in_subsession=self.group_id_in_subsession,
-                    message=error_message[:FAILURE_MESSAGE_MAX_LENGTH],
-                    traceback=traceback_str
-                )
-                raise
-
-    def inner_try(self):
+    def inner_try(self) -> str:
         self.complete_aapa()
+        return ResponseCode.COMPLETE
 
     def set_non_model_attributes(self, kwargs):
 
@@ -137,11 +104,14 @@ class AfterAllPlayersArrive:
 
 
 class GroupByArrivalTime(AfterAllPlayersArrive):
-    def inner_try(self):
+    def inner_try(self) -> str:
         player_ids = self.wp._gbat_get_waiting_player_ids()
         regrouped = self.wp._gbat_try_to_regroup(player_ids)
         if regrouped:
             self.complete_aapa()
+            return ResponseCode.COMPLETE
+        elif regrouped == 3:
+            return ResponseCode.NOT_COMPLETE
 
     def was_already_completed(self):
         group_id_in_subsession = self.GroupClass.objects.filter(
@@ -161,7 +131,7 @@ class WorkerBase:
             consumer = GroupByArrivalTime(aapa_kwargs)
         else:
             consumer = AfterAllPlayersArrive(aapa_kwargs)
-        consumer.try_to_complete()
+        return consumer.try_to_complete()
 
     def listen(self):
         '''
@@ -174,11 +144,32 @@ class WorkerBase:
         while True:
             aapa_kwargs = self.get_next_aapa_kwargs()
             try:
-                self.try_to_complete(aapa_kwargs)
+                response_code = self.try_to_complete(aapa_kwargs)
+                response = {
+                    'response_code': response_code,
+                }
+                self.respond(
+                    response_key=aapa_kwargs['response_key'],
+                    response=response
+                )
             except Exception as exc:
-                logger.exception(repr(exc))
+                error_message = repr(exc)
+                traceback_str = traceback.format_exc()
+                logger.exception(error_message)
+                response = {
+                    'response_code': ResponseCode.ERROR,
+                    'traceback': traceback_str,
+                }
+                self.respond(
+                    response_key=aapa_kwargs['response_key'],
+                    response=response
+                )
+
 
     def get_next_aapa_kwargs(self):
+        raise NotImplementedError()
+
+    def respond(self, *, response_key, response):
         raise NotImplementedError()
 
 
@@ -198,6 +189,9 @@ class RedisWorker(WorkerBase):
         key, message_bytes = result
         aapa_kwargs = json.loads(message_bytes.decode('utf-8'))
         return aapa_kwargs
+
+    def respond(self, *, response_key: str, response: dict):
+        self.redis_conn.rpush(response_key, response)
 
 
 class InProcessWorker(WorkerBase):
@@ -222,9 +216,15 @@ class WaitPageThread(threading.Thread):
 
 
 REDIS_REQUEST_KEY = 'otree-wait-page-request'
+REDIS_RESPONSE_KEY = 'otree-wait-page-response'
 
 request_queue = queue.Queue()
 response_queue = queue.Queue()
+
+class ResponseCode:
+    ERROR = 'ERROR'
+    NOT_COMPLETE = 'NOT_COMPLETE'
+    COMPLETE = 'COMPLETE'
 
 
 def try_to_complete(aapa_kwargs):
@@ -233,9 +233,18 @@ def try_to_complete(aapa_kwargs):
     elif otree.common_internal.USE_REDIS:
         redis_conn = otree.common_internal.get_redis_conn()
         redis_conn.rpush(REDIS_REQUEST_KEY, json.dumps(aapa_kwargs))
+        response_key = aapa_kwargs['response_key']
+        key, bytes = redis_conn.blpop(response_key)
+        return json.loads(bytes.decode('utf-8'))
     else:
         request_queue.put(aapa_kwargs)
+        # possible race condition: does the earlier call to get() always
+        # get the next item? what if another thread is also calling get?
+        # from the queue docs i think that 'multi-consumer' is supported
+        # and locks are used.
+        return response_queue.get()
 
 
 def flush_redis(redis_conn):
     redis_conn.delete(REDIS_REQUEST_KEY)
+    redis_conn.delete(REDIS_RESPONSE_KEY)

@@ -977,6 +977,7 @@ class WaitPage(FormPageOrInGameWaitPage, GenericWaitPageMixin):
             session_id=self.session.id,
             index_in_pages=self._index_in_pages,
             group_by_arrival_time=self.group_by_arrival_time,
+            response_key='{}{}'.format(otree.waitpage.REDIS_RESPONSE_KEY, self.player.id)
         ))
 
         if not (self.wait_for_all_groups or self.group_by_arrival_time):
