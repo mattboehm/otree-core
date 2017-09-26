@@ -47,6 +47,9 @@ class Command(BaseCommand):
         "Resets your development database to a fresh state. "
         "All data will be deleted.")
 
+    #Comma-delimited string. if a table starts with any of these prefixes, it is ignored by this command.
+    stealth_options = ('ignore_table_prefixes',)
+
     def add_arguments(self, parser):
         ahelp = (
             'Tells the resetdb command to NOT prompt the user for '
@@ -67,10 +70,16 @@ class Command(BaseCommand):
         engine = dbconf["ENGINE"]
         return drop_tables_command(engine)
 
-    def _get_tables(self, db):
+    def _get_tables(self, db, ignore_prefixes=""):
         tables = []
         out = six.StringIO()
-        call_command('inspectdb', database=db, no_color=True, stdout=out)
+        if ignore_prefixes:
+            prefixes = ignore_prefixes.split(",")
+            table_filter = lambda tablename: not any((tablename.startswith(prefix) for prefix in prefixes))
+        else:
+            # Include all tables
+            table_filter = lambda table_name: True
+        call_command('inspectdb', database=db, no_color=True, stdout=out, table_name_filter=table_filter)
         for line in out.getvalue().splitlines():
             line = line.strip()
             if line.startswith("db_table = '"):
@@ -102,7 +111,7 @@ class Command(BaseCommand):
             dt_stmt = self._drop_table_stmt(dbconf)
 
             logger.info("Retrieving Existing Tables...")
-            tables = self._get_tables(db)
+            tables = self._get_tables(db, options.get("ignore_table_prefixes", ""))
 
             logger.info("Dropping Tables...")
 
